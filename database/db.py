@@ -22,6 +22,7 @@ class Database:
             custom_caption=None, 
             thumb=None, 
             target_chat=None,
+            upload_mode="PM", # Default mode: Private Message
             verify_token=0  # Timestamp for verification expiry
         )
 
@@ -38,7 +39,6 @@ class Database:
         return await self.col.count_documents({})
 
     async def get_all_users(self):
-        # Broadcast loop ke liye cursor return karna better hota hai
         return self.col.find({})
 
     async def delete_user(self, user_id):
@@ -88,6 +88,15 @@ class Database:
         user = await self.col.find_one({'id': int(id)})
         return user.get('target_chat') if user else None
 
+    # --- Upload Mode Logic (PM or Channel) ---
+    async def set_upload_mode(self, id, mode):
+        # mode can be "PM" or "Channel"
+        await self.col.update_one({'id': int(id)}, {'$set': {'upload_mode': mode}})
+
+    async def get_upload_mode(self, id):
+        user = await self.col.find_one({'id': int(id)})
+        return user.get('upload_mode', "PM") if user else "PM"
+
     # --- Verification Logic (6 Hours Access) ---
     async def verify_user(self, id):
         expiry_time = time.time() + 21600  # Current time + 6 Hours
@@ -97,7 +106,7 @@ class Database:
         user = await self.col.find_one({'id': int(id)})
         if not user: return False
         expiry = user.get('verify_token', 0)
-        return expiry > time.time()  # Returns True if token is still valid
+        return expiry > time.time() 
 
     # --- Admin Config Methods (Toggle & Shortener) ---
     async def set_verify_status(self, status: bool):
@@ -117,6 +126,3 @@ class Database:
         return config
 
 db = Database(DB_URI, DB_NAME)
-
-# Don't Remove Credit 
-# Ask Doubt on telegram @theprofessorreport_bot
