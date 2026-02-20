@@ -8,10 +8,9 @@ import requests
 import pyrogram
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery 
-from pyrogram.errors import UserNotParticipant
+from pyrogram.errors import UserNotParticipant, ChatAdminRequired
 from config import API_ID, API_HASH, ERROR_MESSAGE, LOGIN_SYSTEM, WAITING_TIME, ADMINS, LOG_CHANNEL
 from database.db import db
-from devshiva.strings import HELP_TXT
 from utils.progress import progress_for_pyrogram
 
 # --- IMPORT YOUR LOGIN FUNCTION ---
@@ -43,9 +42,8 @@ def get_shortlink(url, api, link):
         print(f"Shortener Error: {e}")
         return link
 
-# --- UPDATED: FORCE SUBSCRIBE CHECK ---
+# --- UPDATED: STRICT FORCE SUBSCRIBE CHECK ---
 async def check_fsub(client, message):
-    # Get ID from Config or hardcoded
     FSUB_CHANNEL = -1003627956964 # Your Actual Channel ID
     try:
         user = await client.get_chat_member(FSUB_CHANNEL, message.from_user.id)
@@ -53,20 +51,48 @@ async def check_fsub(client, message):
             await message.reply_text("❌ You are banned from using this bot.")
             return False
     except UserNotParticipant:
-        # Generate Join Link
         try:
             invite = await client.create_chat_invite_link(FSUB_CHANNEL)
             url = invite.invite_link
         except:
-            url = "https://t.me/devXvoid" # Fallback
+            url = "https://t.me/devXvoid" 
 
-        join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Channel 📢", url=url)]])
-        await message.reply_text("<b>⚠️ Access Denied!</b>\n\nYou must join our updates channel to use this bot.", reply_markup=join_btn)
+        join_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Join Channel 📢", url=url)],
+            [InlineKeyboardButton("🔄 Checked / Try Again", callback_data="check_fsub_btn")]
+        ])
+        
+        text = "<b>⚠️ Access Denied!</b>\n\nYou must join our updates channel to use this bot. If you leave, you lose access."
+        if isinstance(message, CallbackQuery):
+            await message.answer(text, show_alert=True)
+        else:
+            await message.reply_text(text, reply_markup=join_btn)
         return False
-    except Exception as e:
-        print(f"FSub Error: {e}")
+    except Exception:
         return True
     return True
+
+# --- DETAILED HELP TEXT ---
+DETAILED_HELP = """
+<b>🛠 How to use Save Restricted Bot</b>
+
+<b>1️⃣ Basic Usage:</b>
+• Send any public or private post link to download.
+• For private posts, you must <b>Login</b> first.
+
+<b>2️⃣ Custom Settings:</b>
+• <code>/set_caption</code> : Set custom caption.
+• <code>/set_thumb</code> : Reply to a photo to set thumbnail.
+• <code>/set_chat</code> : Set channel to receive files.
+
+<b>3️⃣ Upload Modes:</b>
+• <b>PM Mode:</b> Files sent to your private chat.
+• <b>Channel Mode:</b> Files sent to your set channel.
+• Toggle this in <b>Settings ⚙️</b>.
+
+<b>4️⃣ Caption Tags:</b>
+• <code>{file_name}</code>, <code>{file_size}</code>, <code>{file_caption}</code>
+"""
 
 # --- START COMMAND & VERIFICATION ---
 @Client.on_message(filters.command(["start"]) & filters.private)
@@ -89,38 +115,34 @@ async def send_start(client: Client, message: Message):
         sent_time = last_link_gen.get(user_id, 0)
         if time.time() - sent_time < 30:
             btn = [[InlineKeyboardButton("Try Again 🔐", callback_data="gen_link")]]
-            return await message.reply_text("<b>⚠️ Bypass Detected!</b>\n\nDon't try to be smart! 😎 Complete properly.", reply_markup=InlineKeyboardMarkup(btn))
+            return await message.reply_text("<b>⚠️ Bypass Detected!</b>", reply_markup=InlineKeyboardMarkup(btn))
         await db.verify_user(user_id)
-        return await message.reply_text("<b>Verification Successful! ✅</b>\n\nYou now have unlimited access for 6 hours.")
+        return await message.reply_text("<b>Verification Successful! ✅</b>")
 
     is_verified = await db.get_verify_status(user_id)
-    welcome_img = "logo.png" 
     welcome_text = (
         f"<b>👋 Hi {message.from_user.mention}!</b>\n\n"
         "I am a powerful **Save Restricted Content Bot**.\n\n"
-        "✨ <b>Features:</b>\n"
-        "🚀 <i>Batch Downloads & Custom Thumbnails</i>\n"
-        "📝 <i>Dynamic Captions with {file_name} & {file_size}</i>\n"
-        f"{'✅ <b>You have active premium access!</b>' if is_verified else '🔓 <b>Unlimited Access for 6 Hours (After Verify)</b>'}"
+        f"{'✅ <b>Premium Active!</b>' if is_verified else '🔓 <b>Verify for 6h Access</b>'}"
     )
 
-    buttons = [[InlineKeyboardButton("Help 🛠️", callback_data="help"), InlineKeyboardButton("Login 🔑", callback_data="login_process")],
-               [InlineKeyboardButton("Settings ⚙️", callback_data="settings_menu")]]
+    buttons = [[InlineKeyboardButton("Help 🛠️", callback_data="help"), InlineKeyboardButton("Settings ⚙️", callback_data="settings_menu")],
+               [InlineKeyboardButton("Login 🔑", callback_data="login_process")]]
     if not is_verified: buttons[1].append(InlineKeyboardButton("Verify Bot 🔓", callback_data="gen_link"))
     
-    try: await message.reply_photo(photo=welcome_img, caption=welcome_text, reply_markup=InlineKeyboardMarkup(buttons))
+    try: await message.reply_photo(photo="logo.png", caption=welcome_text, reply_markup=InlineKeyboardMarkup(buttons))
     except: await message.reply_text(text=welcome_text, reply_markup=InlineKeyboardMarkup(buttons))
 
-# --- ADMIN: STATS & BROADCAST ---
+# --- ADMIN COMMANDS ---
 @Client.on_message(filters.command("stats") & filters.user(ADMINS))
 async def get_stats(client, message):
     users_count = await db.total_users_count()
-    await message.reply_text(f"<b>📊 Current Stats:</b>\n\nTotal Users: <code>{users_count}</code>")
+    await message.reply_text(f"<b>📊 Stats:</b> <code>{users_count}</code>")
 
 @Client.on_message(filters.command("broadcast") & filters.user(ADMINS))
 async def broadcast_handler(client, message):
-    if not message.reply_to_message: return await message.reply_text("Reply to a message to broadcast.")
-    b_msg = await message.reply_text("<b>🚀 Broadcast Started...</b>")
+    if not message.reply_to_message: return await message.reply_text("Reply to a message.")
+    b_msg = await message.reply_text("<b>🚀 Started...</b>")
     users = await db.get_all_users()
     success, failed = 0, 0
     async for user in users:
@@ -128,59 +150,99 @@ async def broadcast_handler(client, message):
             await message.reply_to_message.copy(user['id'])
             success += 1
         except: failed += 1
-    await b_msg.edit(f"<b>✅ Broadcast Completed!</b>\n\nSent: {success}\nFailed: {failed}")
+    await b_msg.edit(f"<b>✅ Done!</b>\nSent: {success}\nFailed: {failed}")
 
-# --- CALLBACKS ---
+# --- CALLBACKS & TOGGLE LOGIC ---
 @Client.on_callback_query()
 async def cb_handler(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    if query.data == "login_process":
+    
+    # Check FSub for every interaction except the join check button itself
+    if query.data != "check_fsub_btn":
+        if not await check_fsub(client, query): return
+
+    if query.data == "check_fsub_btn":
+        if await check_fsub(client, query):
+            await query.message.delete()
+            await send_start(client, query.message)
+
+    elif query.data == "login_process":
         await query.message.delete()
         try: await login_handler(client, query.message)
-        except Exception as e: print(f"Login Handler Error: {e}")
+        except Exception as e: print(f"Login Error: {e}")
+
     elif query.data == "gen_link":
         config = await db.get_verify_config()
-        if not config.get('is_on'): return await query.answer("Verification is disabled.", show_alert=True)
+        if not config.get('is_on'): return await query.answer("Disabled.", show_alert=True)
         s_url, s_api = config.get('url'), config.get('api')
         token_link = f"https://t.me/{client.me.username}?start=verify_{user_id}"
         short_link = get_shortlink(s_url, s_api, token_link)
         last_link_gen[user_id] = time.time()
         btn = [[InlineKeyboardButton("Open Verification Link 🔓", url=short_link)]]
         await query.message.edit_caption(caption="<b>🔐 Security Verification Required</b>", reply_markup=InlineKeyboardMarkup(btn))
+
     elif query.data == "settings_menu":
-        # Check current settings
-        mode = await db.get_upload_mode(user_id)
-        chat = await db.get_target_chat(user_id)
-        settings_text = (f"<b>⚙️ Bot Configuration</b>\n\n"
-                        f"<b>1️⃣ Current Mode:</b> <code>{mode}</code>\n"
-                        f"<b>2️⃣ Target Chat:</b> <code>{chat or 'Private Chat (PM)'}</code>\n"
-                        "• <code>/set_caption</code> - Set custom caption\n"
-                        "• <code>/set_thumb</code> - Set thumbnail\n"
-                        "• <code>/set_chat</code> - Set Destination Channel")
-        await query.message.edit_caption(caption=settings_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back 🔙", callback_data="back_start")]]))
+        await show_settings_panel(client, query.message, user_id)
+
+    elif query.data.startswith("set_mode_"):
+        new_mode = query.data.split("_")[2]
+        await db.set_upload_mode(user_id, new_mode)
+        await query.answer(f"✅ Mode: {new_mode}", show_alert=False)
+        await show_settings_panel(client, query.message, user_id)
+
     elif query.data == "help":
-        await query.message.edit_caption(caption=HELP_TXT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back 🔙", callback_data="back_start")]]))
+        await query.message.edit_caption(caption=DETAILED_HELP, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back 🔙", callback_data="back_start")]]))
+    
     elif query.data == "back_start":
         await query.message.delete()
         await send_start(client, query.message)
 
-# --- SETTINGS COMMANDS ---
+# --- SETTINGS PANEL HELPER ---
+async def show_settings_panel(client, message, user_id):
+    mode = await db.get_upload_mode(user_id)
+    chat = await db.get_target_chat(user_id)
+    
+    # Toggle button text logic
+    mode_btn_text = "📁 Upload to: PM" if mode == "PM" else "📢 Upload to: CHANNEL"
+    next_mode = "Channel" if mode == "PM" else "PM"
+    
+    settings_text = (f"<b>⚙️ Bot Configuration</b>\n\n"
+                    f"<b>Mode:</b> <code>{mode}</code>\n"
+                    f"<b>Target:</b> <code>{chat or 'Private Chat'}</code>\n\n"
+                    "• <code>/set_caption</code> - Set caption\n"
+                    "• <code>/set_chat</code> - Set Channel ID")
+    
+    btns = [[InlineKeyboardButton(mode_btn_text, callback_data=f"set_mode_{next_mode}")],
+            [InlineKeyboardButton("Back 🔙", callback_data="back_start")]]
+    await message.edit_caption(caption=settings_text, reply_markup=InlineKeyboardMarkup(btns))
+
+# --- SETTINGS COMMANDS WITH ADMIN CHECK ---
 @Client.on_message(filters.command("set_caption") & filters.private)
 async def set_caption_cmd(client, message):
-    if len(message.command) < 2:
-        return await message.reply("<b>Usage:</b> <code>/set_caption Your Text</code>")
+    if not await check_fsub(client, message): return
+    if len(message.command) < 2: return await message.reply("<b>Usage:</b> <code>/set_caption Text</code>")
     caption = message.text.split(None, 1)[1]
     await db.set_caption(message.from_user.id, caption)
-    await message.reply("✅ **Custom Caption Saved!**")
+    await message.reply("✅ **Caption Saved!**")
 
 @Client.on_message(filters.command("set_chat") & filters.private)
 async def set_chat_cmd(client, message):
-    if len(message.command) < 2:
-        return await message.reply("<b>Usage:</b> <code>/set_chat -100xxxxxx</code>")
+    if not await check_fsub(client, message): return
+    if len(message.command) < 2: return await message.reply("<b>Usage:</b> <code>/set_chat -100xxxxxx</code>")
+    
     chat_id = message.command[1]
+    
+    # Admin Check Logic
+    try:
+        bot_stat = await client.get_chat_member(chat_id, "me")
+        if bot_stat.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+            return await message.reply("❌ **Error:** Make me admin in that channel first!")
+    except Exception as e:
+        return await message.reply(f"❌ **Error:** Access denied to channel.\n`{e}`")
+
     await db.set_target_chat(message.from_user.id, chat_id)
     await db.set_upload_mode(message.from_user.id, "Channel")
-    await message.reply(f"✅ **Target Channel Saved!**\nUpload Mode set to: **Channel**")
+    await message.reply(f"✅ **Target Channel Saved!**")
 
 # --- MAIN LOGIC ---
 @Client.on_message(filters.text & filters.private)
@@ -203,10 +265,7 @@ async def save(client: Client, message: Message):
     
     total_files = (toID - fromID) + 1
     if LOG_CHANNEL:
-        log_work = (f"<b>#work</b>\n\n<b>Username:</b> @{message.from_user.username or 'N/A'}\n"
-                    f"<b>First Name:</b> {message.from_user.first_name}\n"
-                    f"<b>Process:</b> {'Batch' if total_files > 1 else 'Single'}\n"
-                    f"<b>Total Files:</b> <code>{total_files}</code>")
+        log_work = (f"<b>#work</b>\n<b>User:</b> {message.from_user.first_name}\n<b>Files:</b> {total_files}")
         try: await client.send_message(LOG_CHANNEL, log_work)
         except: pass
 
@@ -224,14 +283,9 @@ async def save(client: Client, message: Message):
     batch_temp.IS_BATCH[user_id] = False
     for msgid in range(fromID, toID + 1):
         if batch_temp.IS_BATCH.get(user_id) == True: break
-        # Fix chatid logic
-        if is_private:
-            chatid = int("-100" + datas[4])
-        else:
-            chatid = datas[3]
-            
+        chatid = int("-100" + datas[4]) if is_private else datas[3]
         try: await handle_private(client, acc, message, chatid, msgid)
-        except Exception as e: print(f"Error in Batch: {e}")
+        except Exception as e: print(f"Batch Error: {e}")
         await asyncio.sleep(WAITING_TIME)
 
     if is_private and acc: await acc.disconnect()
@@ -245,12 +299,8 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
     if not msg or msg.empty: return 
     
     user_id = message.from_user.id
-    
-    # --- CHANNEL SEND LOGIC ---
     upload_mode = await db.get_upload_mode(user_id)
     target_id = await db.get_target_chat(user_id)
-    
-    # Use target channel only if mode is 'Channel' and target_id exists
     target_chat = target_id if (upload_mode == "Channel" and target_id) else message.chat.id
     
     custom_caption = await db.get_caption(user_id)
@@ -279,15 +329,10 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
         elif msg.photo: await client.send_photo(photo=file, caption=final_cap)
         elif msg.audio: await client.send_audio(audio=file, thumb=ph_path, **common_args)
         
-        # If sent to channel, notify user in PM
         if str(target_chat) != str(message.chat.id):
-            await smsg.edit("✅ **Successfully Sent to your Channel!**")
-            
+            await smsg.edit("✅ **Sent to Channel!**")
     except Exception as e: 
         await smsg.edit(f"❌ Error: {e}")
-        # Fallback to PM if channel send fails
-        try: await client.copy_message(message.chat.id, target_chat, smsg.id)
-        except: pass
     finally:
         if file and os.path.exists(file): os.remove(file)
         if ph_path and os.path.exists(ph_path): os.remove(ph_path)
