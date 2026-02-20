@@ -43,20 +43,28 @@ def get_shortlink(url, api, link):
         print(f"Shortener Error: {e}")
         return link
 
-# --- NEW: FORCE SUBSCRIBE CHECK ---
+# --- UPDATED: FORCE SUBSCRIBE CHECK ---
 async def check_fsub(client, message):
-    # Change your channel ID/Username in config or here
-    FSUB_CHANNEL = -100123456789 # Example ID
+    # Get ID from Config or hardcoded
+    FSUB_CHANNEL = -1003627956964 # Your Actual Channel ID
     try:
         user = await client.get_chat_member(FSUB_CHANNEL, message.from_user.id)
         if user.status == enums.ChatMemberStatus.BANNED:
             await message.reply_text("❌ You are banned from using this bot.")
             return False
     except UserNotParticipant:
-        join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Channel 📢", url="https://t.me/devXvoid")]])
+        # Generate Join Link
+        try:
+            invite = await client.create_chat_invite_link(FSUB_CHANNEL)
+            url = invite.invite_link
+        except:
+            url = "https://t.me/devXvoid" # Fallback
+
+        join_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Join Channel 📢", url=url)]])
         await message.reply_text("<b>⚠️ Access Denied!</b>\n\nYou must join our updates channel to use this bot.", reply_markup=join_btn)
         return False
-    except Exception:
+    except Exception as e:
+        print(f"FSub Error: {e}")
         return True
     return True
 
@@ -100,7 +108,8 @@ async def send_start(client: Client, message: Message):
                [InlineKeyboardButton("Settings ⚙️", callback_data="settings_menu")]]
     if not is_verified: buttons[1].append(InlineKeyboardButton("Verify Bot 🔓", callback_data="gen_link"))
     
-    await message.reply_photo(photo=welcome_img, caption=welcome_text, reply_markup=InlineKeyboardMarkup(buttons))
+    try: await message.reply_photo(photo=welcome_img, caption=welcome_text, reply_markup=InlineKeyboardMarkup(buttons))
+    except: await message.reply_text(text=welcome_text, reply_markup=InlineKeyboardMarkup(buttons))
 
 # --- ADMIN: STATS & BROADCAST ---
 @Client.on_message(filters.command("stats") & filters.user(ADMINS))
@@ -114,7 +123,7 @@ async def broadcast_handler(client, message):
     b_msg = await message.reply_text("<b>🚀 Broadcast Started...</b>")
     users = await db.get_all_users()
     success, failed = 0, 0
-    for user in users:
+    async for user in users:
         try:
             await message.reply_to_message.copy(user['id'])
             success += 1
@@ -139,10 +148,15 @@ async def cb_handler(client: Client, query: CallbackQuery):
         btn = [[InlineKeyboardButton("Open Verification Link 🔓", url=short_link)]]
         await query.message.edit_caption(caption="<b>🔐 Security Verification Required</b>", reply_markup=InlineKeyboardMarkup(btn))
     elif query.data == "settings_menu":
-        settings_text = ("<b>⚙️ Bot Configuration & Help</b>\n\n"
-                        "<b>1️⃣ Caption Tags:</b>\n• <code>{file_name}</code>, <code>{file_size}</code>, <code>{file_caption}</code>\n\n"
-                        "<b>2️⃣ Formatting Styles (HTML):</b>\n• Bold, Italic, Hyperlinks supported.\n\n"
-                        "<b>3️⃣ Commands:</b>\n• /set_caption, /set_thumb, /set_chat")
+        # Check current settings
+        mode = await db.get_upload_mode(user_id)
+        chat = await db.get_target_chat(user_id)
+        settings_text = (f"<b>⚙️ Bot Configuration</b>\n\n"
+                        f"<b>1️⃣ Current Mode:</b> <code>{mode}</code>\n"
+                        f"<b>2️⃣ Target Chat:</b> <code>{chat or 'Private Chat (PM)'}</code>\n"
+                        "• <code>/set_caption</code> - Set custom caption\n"
+                        "• <code>/set_thumb</code> - Set thumbnail\n"
+                        "• <code>/set_chat</code> - Set Destination Channel")
         await query.message.edit_caption(caption=settings_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back 🔙", callback_data="back_start")]]))
     elif query.data == "help":
         await query.message.edit_caption(caption=HELP_TXT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back 🔙", callback_data="back_start")]]))
@@ -150,7 +164,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         await query.message.delete()
         await send_start(client, query.message)
 
-# --- CAPTION SETTING ---
+# --- SETTINGS COMMANDS ---
 @Client.on_message(filters.command("set_caption") & filters.private)
 async def set_caption_cmd(client, message):
     if len(message.command) < 2:
@@ -158,6 +172,15 @@ async def set_caption_cmd(client, message):
     caption = message.text.split(None, 1)[1]
     await db.set_caption(message.from_user.id, caption)
     await message.reply("✅ **Custom Caption Saved!**")
+
+@Client.on_message(filters.command("set_chat") & filters.private)
+async def set_chat_cmd(client, message):
+    if len(message.command) < 2:
+        return await message.reply("<b>Usage:</b> <code>/set_chat -100xxxxxx</code>")
+    chat_id = message.command[1]
+    await db.set_target_chat(message.from_user.id, chat_id)
+    await db.set_upload_mode(message.from_user.id, "Channel")
+    await message.reply(f"✅ **Target Channel Saved!**\nUpload Mode set to: **Channel**")
 
 # --- MAIN LOGIC ---
 @Client.on_message(filters.text & filters.private)
@@ -178,7 +201,6 @@ async def save(client: Client, message: Message):
     fromID = int(temp[0].strip())
     toID = int(temp[1].strip()) if len(temp) > 1 else fromID
     
-    # --- #work LOGS ---
     total_files = (toID - fromID) + 1
     if LOG_CHANNEL:
         log_work = (f"<b>#work</b>\n\n<b>Username:</b> @{message.from_user.username or 'N/A'}\n"
@@ -201,10 +223,15 @@ async def save(client: Client, message: Message):
 
     batch_temp.IS_BATCH[user_id] = False
     for msgid in range(fromID, toID + 1):
-        if batch_temp.IS_BATCH.get(user_id): break
-        chatid = int("-100" + datas[4]) if is_private else datas[3]
+        if batch_temp.IS_BATCH.get(user_id) == True: break
+        # Fix chatid logic
+        if is_private:
+            chatid = int("-100" + datas[4])
+        else:
+            chatid = datas[3]
+            
         try: await handle_private(client, acc, message, chatid, msgid)
-        except: pass
+        except Exception as e: print(f"Error in Batch: {e}")
         await asyncio.sleep(WAITING_TIME)
 
     if is_private and acc: await acc.disconnect()
@@ -218,7 +245,14 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
     if not msg or msg.empty: return 
     
     user_id = message.from_user.id
-    target_chat = await db.get_target_chat(user_id) or message.chat.id
+    
+    # --- CHANNEL SEND LOGIC ---
+    upload_mode = await db.get_upload_mode(user_id)
+    target_id = await db.get_target_chat(user_id)
+    
+    # Use target channel only if mode is 'Channel' and target_id exists
+    target_chat = target_id if (upload_mode == "Channel" and target_id) else message.chat.id
+    
     custom_caption = await db.get_caption(user_id)
     custom_thumb = await db.get_thumb(user_id)
 
@@ -239,16 +273,25 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
         ph_path = await client.download_media(custom_thumb) if custom_thumb else None
         
         common_args = {"chat_id": target_chat, "caption": final_cap, "parse_mode": enums.ParseMode.HTML, "progress": progress_for_pyrogram, "progress_args": ("📤 **Uploading...**", smsg, time.time())}
+        
         if msg.document: await client.send_document(document=file, thumb=ph_path, **common_args)
         elif msg.video: await client.send_video(video=file, thumb=ph_path, **common_args)
         elif msg.photo: await client.send_photo(photo=file, caption=final_cap)
         elif msg.audio: await client.send_audio(audio=file, thumb=ph_path, **common_args)
-    except Exception as e: await smsg.edit(f"❌ Error: {e}")
+        
+        # If sent to channel, notify user in PM
+        if str(target_chat) != str(message.chat.id):
+            await smsg.edit("✅ **Successfully Sent to your Channel!**")
+            
+    except Exception as e: 
+        await smsg.edit(f"❌ Error: {e}")
+        # Fallback to PM if channel send fails
+        try: await client.copy_message(message.chat.id, target_chat, smsg.id)
+        except: pass
     finally:
-        # --- ROBUST AUTO-CLEAN ---
         if file and os.path.exists(file): os.remove(file)
         if ph_path and os.path.exists(ph_path): os.remove(ph_path)
-        await smsg.delete()
+        if str(target_chat) == str(message.chat.id): await smsg.delete()
 
 # Don't Remove Credit 
 # Ask Doubt on telegram @theprofessorreport_bot
