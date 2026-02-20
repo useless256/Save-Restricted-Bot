@@ -157,7 +157,6 @@ async def broadcast_handler(client, message):
 async def cb_handler(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     
-    # Check FSub for every interaction except the join check button itself
     if query.data != "check_fsub_btn":
         if not await check_fsub(client, query): return
 
@@ -202,7 +201,6 @@ async def show_settings_panel(client, message, user_id):
     mode = await db.get_upload_mode(user_id)
     chat = await db.get_target_chat(user_id)
     
-    # Toggle button text logic
     mode_btn_text = "📁 Upload to: PM" if mode == "PM" else "📢 Upload to: CHANNEL"
     next_mode = "Channel" if mode == "PM" else "PM"
     
@@ -216,7 +214,57 @@ async def show_settings_panel(client, message, user_id):
             [InlineKeyboardButton("Back 🔙", callback_data="back_start")]]
     await message.edit_caption(caption=settings_text, reply_markup=InlineKeyboardMarkup(btns))
 
-# --- SETTINGS COMMANDS WITH ADMIN CHECK ---
+# --- SMART SET_CHAT & FORWARD DETECTOR ---
+@Client.on_message(filters.command("set_chat") & filters.private)
+async def set_chat_cmd(client, message):
+    if not await check_fsub(client, message): return
+    
+    if len(message.command) < 2:
+        return await message.reply(
+            "<b>📍 How to set Target Channel:</b>\n\n"
+            "1️⃣ <b>Method 1:</b> Send <code>/set_chat -100xxxxxx</code>\n"
+            "2️⃣ <b>Method 2:</b> Just <b>Forward</b> any message from your channel to me!\n\n"
+            "<i>Note: Make sure I am Admin in that channel first.</i>"
+        )
+    
+    chat_id = message.command[1]
+    await perform_set_chat(client, message, chat_id)
+
+@Client.on_message(filters.forwarded & filters.private)
+async def forward_handler(client, message):
+    if not await check_fsub(client, message): return
+    
+    if message.forward_from_chat:
+        chat_id = message.forward_from_chat.id
+        await perform_set_chat(client, message, chat_id)
+    else:
+        await message.reply("❌ This forward doesn't contain channel info.")
+
+async def perform_set_chat(client, message, chat_id):
+    try:
+        target_chat = int(chat_id)
+        bot_stat = await client.get_chat_member(target_chat, "me")
+        
+        if bot_stat.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+            return await message.reply("❌ **Admin Required!**\nI am not an admin in this channel. Promote me first!")
+
+        await db.set_target_chat(message.from_user.id, target_chat)
+        await db.set_upload_mode(message.from_user.id, "Channel")
+        
+        await message.reply(
+            f"✅ **Target Saved Successfully!**\n\n"
+            f"<b>ID:</b> <code>{target_chat}</code>\n"
+            f"<b>Mode:</b> Channel (Files will be sent here)"
+        )
+
+    except ValueError:
+        await message.reply("❌ **Invalid ID format!**")
+    except Exception as e:
+        if "PEER_ID_INVALID" in str(e):
+            await message.reply("❌ **Bot not in Channel!**\nAdd the bot as Admin first, then forward a message to register Peer ID.")
+        else:
+            await message.reply(f"❌ **Error:** `{e}`")
+
 @Client.on_message(filters.command("set_caption") & filters.private)
 async def set_caption_cmd(client, message):
     if not await check_fsub(client, message): return
@@ -224,25 +272,6 @@ async def set_caption_cmd(client, message):
     caption = message.text.split(None, 1)[1]
     await db.set_caption(message.from_user.id, caption)
     await message.reply("✅ **Caption Saved!**")
-
-@Client.on_message(filters.command("set_chat") & filters.private)
-async def set_chat_cmd(client, message):
-    if not await check_fsub(client, message): return
-    if len(message.command) < 2: return await message.reply("<b>Usage:</b> <code>/set_chat -100xxxxxx</code>")
-    
-    chat_id = message.command[1]
-    
-    # Admin Check Logic
-    try:
-        bot_stat = await client.get_chat_member(chat_id, "me")
-        if bot_stat.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-            return await message.reply("❌ **Error:** Make me admin in that channel first!")
-    except Exception as e:
-        return await message.reply(f"❌ **Error:** Access denied to channel.\n`{e}`")
-
-    await db.set_target_chat(message.from_user.id, chat_id)
-    await db.set_upload_mode(message.from_user.id, "Channel")
-    await message.reply(f"✅ **Target Channel Saved!**")
 
 # --- MAIN LOGIC ---
 @Client.on_message(filters.text & filters.private)
@@ -301,7 +330,12 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
     user_id = message.from_user.id
     upload_mode = await db.get_upload_mode(user_id)
     target_id = await db.get_target_chat(user_id)
-    target_chat = target_id if (upload_mode == "Channel" and target_id) else message.chat.id
+    
+    # Ensure target_chat is an integer if it's a channel ID
+    try:
+        target_chat = int(target_id) if (upload_mode == "Channel" and target_id) else message.chat.id
+    except:
+        target_chat = message.chat.id
     
     custom_caption = await db.get_caption(user_id)
     custom_thumb = await db.get_thumb(user_id)
