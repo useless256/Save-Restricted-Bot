@@ -30,6 +30,14 @@ def get_readable_file_size(size_in_bytes) -> str:
             return f"{size_in_bytes:.2f} {unit}"
         size_in_bytes /= 1024
 
+def get_readable_time(seconds: int) -> str:
+    if seconds is None or seconds <= 0: return "00:00"
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
 def get_shortlink(url, api, link):
     try:
         clean_base = url.replace("https://", "").replace("http://", "").strip("/")
@@ -83,9 +91,10 @@ DETAILED_HELP = """
 
 <b>2️⃣ Caption Tags (Feelings):</b>
 Use these in <code>/set_caption</code>:
-• <code>{file_name}</code> - Displays original file name.
-• <code>{file_size}</code> - Displays file size (MB/GB).
-• <code>{file_caption}</code> - Displays original post caption.
+• <code>{file_name}</code> - Original file name.
+• <code>{file_size}</code> - File size (MB/GB).
+• <code>{duration}</code> - Video/Audio Runtime.
+• <code>{file_caption}</code> - Original post caption.
 
 <b>3️⃣ Formatting (Styles):</b>
 • <code>&lt;b&gt;Bold&lt;/b&gt;</code> - <b>Bold Text</b>
@@ -251,7 +260,6 @@ async def save(client: Client, message: Message):
         if batch_temp.IS_BATCH.get(user_id) == True: break
         chatid = int("-100" + datas[4]) if "/c/" in message.text else datas[3]
         try:
-            # Re-check acc within loop for private links
             is_private = "/c/" in message.text
             if is_private:
                 user_data = await db.get_session(user_id)
@@ -288,7 +296,12 @@ async def handle_private(client: Client, acc, message: Message, chatid, msgid: i
     media_obj = getattr(msg, msg.media.value)
     f_name = getattr(media_obj, "file_name", "No Name")
     f_size = get_readable_file_size(getattr(media_obj, "file_size", 0))
-    final_cap = custom_caption.replace("{file_name}", f_name).replace("{file_size}", f_size).replace("{file_caption}", msg.caption or "") if custom_caption else (msg.caption or "")
+    
+    # --- NEW: RUNTIME/DURATION LOGIC ---
+    duration_secs = getattr(media_obj, "duration", 0)
+    runtime = get_readable_time(duration_secs)
+
+    final_cap = custom_caption.replace("{file_name}", f_name).replace("{file_size}", f_size).replace("{duration}", runtime).replace("{file_caption}", msg.caption or "") if custom_caption else (msg.caption or "")
 
     file = None
     ph_path = None
